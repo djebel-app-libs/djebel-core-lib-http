@@ -107,6 +107,18 @@ class Dj_App_Core_Lib_Http
                 $request_url = $request_url . $separator . $query;
             }
 
+            // Headers accept curl-style "Key: Value" strings OR key => value pairs; a string key
+            // becomes "key: value" here, so callers never hand-concatenate the ': ' themselves.
+            $curl_headers = [];
+
+            foreach ($headers as $header_name => $header_value) {
+                if (is_int($header_name)) {
+                    $curl_headers[] = $header_value;
+                } else {
+                    $curl_headers[] = $header_name . ': ' . $header_value;
+                }
+            }
+
             $curl_handle = curl_init($request_url);
 
             if (empty($curl_handle)) {
@@ -115,7 +127,7 @@ class Dj_App_Core_Lib_Http
 
             $curl_options = [
                 CURLOPT_CUSTOMREQUEST => $method,
-                CURLOPT_HTTPHEADER => $headers,
+                CURLOPT_HTTPHEADER => $curl_headers,
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_CONNECTTIMEOUT => $connect_timeout,
                 CURLOPT_TIMEOUT => $timeout,
