@@ -7,8 +7,7 @@ description: Generic outbound HTTP client (Dj_App_Core_Lib_Http) — lazily load
 min_php_ver: 7.4
 */
 
-// A lazy library (loaded on demand via Dj_App_Plugins::loadLib), NOT a plugin — it registers
-// no hooks. It DOES apply request-lifecycle filters (pre-request short-circuit, request-args
+// Not a plugin — it registers no hooks. It DOES apply request-lifecycle filters (pre-request short-circuit, request-args
 // rewrite, response post-process) so consumers can hook the request without this lib coupling
 // to them. Instance-based (grab the singleton, then call instance methods) so it's mockable.
 // A pre-defined / custom implementation wins: if the class already exists, don't redeclare.
