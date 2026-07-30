@@ -63,6 +63,12 @@ class Dj_App_Core_Lib_Http
         }
 
         try {
+            // Request-opts filter — a listener modifies the OUTGOING request (inject auth
+            // headers by URL, adjust timeout/ssl) before it's built. FIRST in the try so a
+            // throwing listener is caught like any other request failure. Reached only when
+            // the pre_request filter above didn't take the call over.
+            $extra_opts = Dj_App_Hooks::applyFilter('app.core.lib.http.filter.request_opts', $extra_opts, $ctx);
+
             $url = Dj_App_String_Util::trim($url);
 
             if (empty($url)) {
