@@ -63,10 +63,15 @@ class Dj_App_Core_Lib_Http
         }
 
         try {
+            // URL seam — a listener can rewrite the target URL (route to a different backend,
+            // add/strip a prefix) before the request is built. FIRST in the try so a throwing
+            // listener is caught. Reached only when pre_request didn't take the call over.
+            $url = Dj_App_Hooks::applyFilter('app.core.lib.http.filter.request_url', $url, $ctx);
+            $ctx['url'] = $url;
+
             // Request-opts filter — a listener modifies the OUTGOING request (inject auth
-            // headers by URL, adjust timeout/ssl) before it's built. FIRST in the try so a
-            // throwing listener is caught like any other request failure. Reached only when
-            // the pre_request filter above didn't take the call over.
+            // headers by URL, adjust timeout/ssl) before it's built. Sees the (possibly
+            // rewritten) URL in $ctx.
             $extra_opts = Dj_App_Hooks::applyFilter('app.core.lib.http.filter.request_opts', $extra_opts, $ctx);
 
             $url = Dj_App_String_Util::trim($url);
