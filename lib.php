@@ -83,7 +83,7 @@ class Dj_App_Core_Lib_Http
             $url = Dj_App_String_Util::trim($url);
 
             if (empty($url)) {
-                throw new Dj_App_Exception('Request URL is missing.', ['code' => 'http.url_missing']);
+                throw new Dj_App_Validation_Exception('Request URL is missing.', ['code' => 'http.url_missing']);
             }
 
             $method = empty($extra_opts['method']) ? 'GET' : strtoupper($extra_opts['method']);
