@@ -7,9 +7,9 @@ description: Generic outbound HTTP client (Dj_App_Core_Lib_Http) — lazily load
 min_php_ver: 7.4
 */
 
-// Not a plugin — it registers no hooks. It DOES apply request-lifecycle filters (pre-request short-circuit, request-args
-// rewrite, response post-process) so consumers can hook the request without this lib coupling
-// to them. Instance-based (grab the singleton, then call instance methods) so it's mockable.
+// Not a plugin — it registers no hooks. It DOES apply request-lifecycle filters: a pre-request
+// short-circuit, a request-args rewrite and a response post-process, each named where it fires.
+// Instance-based (grab the singleton, then call instance methods) so it's mockable.
 // A pre-defined / custom implementation wins: if the class already exists, don't redeclare.
 if (class_exists('Dj_App_Core_Lib_Http')) {
     return;
@@ -40,8 +40,11 @@ class Dj_App_Core_Lib_Http
      * @param string $url
      * @param array  $args        Request data: JSON/form body for POST/PUT, query for GET.
      * @param array  $extra_opts  method, headers (array), timeout, connect_timeout, json (bool), verify_ssl (bool),
-     *                            basic_auth_user + basic_auth_password (HTTP Basic auth for a protected backend).
-     * @return Dj_App_Result  status (bool), code (string), msg (string), data (decoded body), http_status (int).
+     *                            basic_auth_user + basic_auth_password (HTTP Basic auth for a protected backend),
+     *                            output_stream (a writable handle — the body is written to it as
+     *                            it arrives and never parsed, for a download rather than a reply).
+     * @return Dj_App_Result  status (bool), code (string), msg (string), data (decoded body, and
+     *                        empty when the body was streamed), http_status (int).
      */
     public function request($url, $args = [], $extra_opts = [])
     {
@@ -151,6 +154,20 @@ class Dj_App_Core_Lib_Http
                 $curl_options[CURLOPT_POSTFIELDS] = $body;
             }
 
+            // A caller that hands over a stream gets the body written to it as it arrives,
+            // instead of a string it would have to hold whole — a file download rather than a
+            // response to parse. Absent, everything below behaves exactly as it always has.
+            $output_stream = empty($extra_opts['output_stream']) ? null : $extra_opts['output_stream'];
+
+            if (!empty($output_stream)) {
+                unset($curl_options[CURLOPT_RETURNTRANSFER]);
+                $curl_options[CURLOPT_FILE] = $output_stream;
+
+                // Without this an error page is written to the caller's stream and arrives as
+                // if it were the file they asked for.
+                $curl_options[CURLOPT_FAILONERROR] = true;
+            }
+
             // TLS verification stays ON by default; only an explicit opt-out disables it (e.g. a known
             // self-signed staging cert). Never silently off. Default-TRUE flag idiom (missing → true).
             $verify_ssl = !isset($extra_opts['verify_ssl']) || !empty($extra_opts['verify_ssl']);
@@ -205,16 +222,29 @@ class Dj_App_Core_Lib_Http
 
             Dj_App_Hooks::doAction('app.core.lib.http.action.after_curl_exec', $after_exec_ctx);
 
-            // No usable body → bail. curl_exec returns false on a transport failure (DNS, timeout,
-            // refused, TLS) and an empty string on a body-less response. is_string() also fends off any
-            // non-string return (null / int) defensively — only a non-empty string is parseable.
-            if (!is_string($resp_body) || $resp_body === '') {
+            // A streamed body is already where the caller asked for it, so success comes back as
+            // true rather than as a string and there is nothing here to judge but the transport,
+            // which curl_exec reports as false either way.
+            $body_missing = $resp_body === false;
+
+            if (empty($output_stream)) {
+                // No usable body → bail. curl_exec returns false on a transport failure (DNS, timeout,
+                // refused, TLS) and an empty string on a body-less response. is_string() also fends off any
+                // non-string return (null / int) defensively — only a non-empty string is parseable.
+                $body_missing = !is_string($resp_body) || $resp_body === '';
+            }
+
+            if ($body_missing) {
                 $message = empty($curl_error) ? 'The request did not complete.' : $curl_error;
 
                 throw new Dj_App_Exception($message, ['code' => 'http.network_failed', 'http_status' => $http_status]);
             }
 
-            $data = Dj_App_String_Util::jsonDecode($resp_body);
+            $data = [];
+
+            if (empty($output_stream)) {
+                $data = Dj_App_String_Util::jsonDecode($resp_body);
+            }
 
             $http_ok = $http_status >= 200 && $http_status < 300;
             $code = $http_ok ? 'http.ok' : 'http.http_error';
