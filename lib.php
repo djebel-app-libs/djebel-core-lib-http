@@ -42,9 +42,12 @@ class Dj_App_Core_Lib_Http
      * @param array  $extra_opts  method, headers (array), timeout, connect_timeout, json (bool), verify_ssl (bool),
      *                            basic_auth_user + basic_auth_password (HTTP Basic auth for a protected backend),
      *                            output_stream (a writable handle — the body is written to it as
-     *                            it arrives and never parsed, for a download rather than a reply).
+     *                            it arrives and never parsed, for a download rather than a reply;
+     *                            when that handle is this script's own output, the answering
+     *                            server's content type is sent on as this response's).
      * @return Dj_App_Result  status (bool), code (string), msg (string), data (decoded body, and
-     *                        empty when the body was streamed), http_status (int).
+     *                        empty when the body was streamed), http_status (int),
+     *                        content_type (string, whether the body was streamed or kept).
      */
     public function request($url, $args = [], $extra_opts = [])
     {
@@ -166,6 +169,18 @@ class Dj_App_Core_Lib_Http
                 // Without this an error page is written to the caller's stream and arrives as
                 // if it were the file they asked for.
                 $curl_options[CURLOPT_FAILONERROR] = true;
+
+                // Streaming to the response means delivering it, which includes saying what it
+                // is: the answering server may hand back a type its address did not suggest,
+                // and once the first byte of the body has gone out it is too late to say so.
+                // The callback runs per response header, which is before that byte. Streaming
+                // to anything else is a download the caller owns, so no header is sent.
+                $stream_meta = stream_get_meta_data($output_stream);
+                $stream_target = empty($stream_meta['uri']) ? '' : $stream_meta['uri'];
+
+                if ($stream_target == 'php://output') {
+                    $curl_options[CURLOPT_HEADERFUNCTION] = ['Dj_App_Core_Lib_Http', 'sendResponseContentType'];
+                }
             }
 
             // TLS verification stays ON by default; only an explicit opt-out disables it (e.g. a known
@@ -211,6 +226,13 @@ class Dj_App_Core_Lib_Http
             $http_status = curl_getinfo($curl_handle, CURLINFO_RESPONSE_CODE);
             $http_status = (int) $http_status;
 
+            // What the answering server said this is, which a caller cannot always work out from
+            // the address it asked for — a server that optimizes on the fly may answer a .jpg
+            // with something else. Read whether the body was streamed or kept, so a caller that
+            // took it as a string knows what it is holding.
+            $content_type = curl_getinfo($curl_handle, CURLINFO_CONTENT_TYPE);
+            $content_type = Dj_App_String_Util::trim($content_type);
+
             // after-curl-exec action — fires with the completed transfer (raw body, status, error, and
             // the still-open handle for curl_getinfo) before the handle is closed. An ACTION, not a
             // filter: pure observation, the result is unchanged. 'curl' marks the transport coupling.
@@ -252,6 +274,7 @@ class Dj_App_Core_Lib_Http
             $res_obj->status = $http_ok;
             $res_obj->code = $code;
             $res_obj->http_status = $http_status;
+            $res_obj->content_type = $content_type;
             $res_obj->data($data);
         } catch (Dj_App_Exception $e) {
             $exc_data = $e->getData();
@@ -272,6 +295,30 @@ class Dj_App_Core_Lib_Http
         $res_obj = Dj_App_Hooks::applyFilter('app.core.lib.http.filter.response', $res_obj, $ctx);
 
         return $res_obj;
+    }
+
+    /**
+     * Curl response-header callback, used while a response is being streamed to this script's
+     * own output: it sends the answering server's content type on as this response's, which
+     * can only be done before the first byte of the body goes out.
+     *
+     * Every header line arrives here, including the status line and a blank line, and curl
+     * requires the byte count it was handed back — returning anything else aborts the transfer.
+     * @param resource $curl_handle unused; curl passes the handle to every header callback
+     * @param string $header_line one raw header line, terminated
+     * @return int the number of bytes consumed
+     */
+    public static function sendResponseContentType($curl_handle, $header_line)
+    {
+        $header_bytes = strlen($header_line);
+        $is_content_type = stripos($header_line, 'Content-Type:') === 0;
+
+        if ($is_content_type) {
+            $header_value = Dj_App_String_Util::trim($header_line);
+            header($header_value);
+        }
+
+        return $header_bytes;
     }
 
     /**
